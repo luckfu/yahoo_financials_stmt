@@ -1,4 +1,4 @@
-# Yahoo! Earnings Calendar Scraper
+# Yahoo! Financials Parse
 
 > 项目从 https://github.com/wenboyu2/yahoo-earnings-calendar 修改而来，增加 yahoo Finance数据解析(历史数据怎么获取我也不知道)，个人更喜欢dataframe的返回，所以将返回都改为pandas的dataframe
 
