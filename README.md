@@ -12,7 +12,7 @@ pip install git+https://github.com/luckfu/yahoo_financials_stmt.git
 
 ```py
 import datetime
-from yahoo_earnings_calendar import YahooEarningsCalendar
+from yahoo_financials_stmt import YahooFinancialsStmt
 yfs = YahooFinancialsStmt()
 yfs.get_financials('box')
 ```
