@@ -38,7 +38,7 @@ print(yfs.earnings_between(date_from, date_to))
 import datetime
 from yahoo_financials_stmt import YahooFinancialsStmt
 
-yec = YahooFinancialsStmt()
+yfs = YahooFinancialsStmt()
 # Returns the next earnings date of BOX in Unix timestamp
 print(yfs.get_next_earnings_date('box'))
 # 1508716800
@@ -50,7 +50,7 @@ from yahoo_financials_stmt import YahooFinancialsStmt
 
 yfs = YahooFinancialsStmt()
     # Returns a list of all available earnings of BOX
-print(yec.gfs_earnings_of('box'))
+print(yfs.gfs_earnings_of('box'))
 ```
 
 
