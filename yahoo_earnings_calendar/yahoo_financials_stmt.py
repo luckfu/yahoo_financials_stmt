@@ -1,0 +1,243 @@
+'''
+Yahoo Financials Statements 
+'''
+import datetime
+import json
+import logging
+import requests
+import time
+import pandas as pd
+
+BASE_URL = 'https://finance.yahoo.com/calendar/earnings'
+BASE_STOCK_URL = 'https://finance.yahoo.com/quote'
+RATE_LIMIT = 2000.0
+SLEEP_BETWEEN_REQUESTS_S = 60 * 60 / RATE_LIMIT
+OFFSET_STEP = 100
+
+# Logging config
+logger = logging.getLogger()
+handler = logging.StreamHandler()
+formatter = logging.Formatter(
+    '%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.ERROR)
+
+
+class YahooFinancialsStmt(object):
+    """
+    This is the class for fetching financials stmt data from Yahoo! Finance
+    """
+
+    def __init__(self, delay=SLEEP_BETWEEN_REQUESTS_S):
+        self.delay = delay
+
+    def _get_data_dict(self, url):
+        print(url)
+        headers = { 'User-Agent' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36' }
+        time.sleep(self.delay)
+        page = requests.get(url,headers=headers)
+        page_content = page.content.decode(encoding='utf-8', errors='strict')
+        page_data_string = [row for row in page_content.split(
+            '\n') if row.startswith('root.App.main = ')][0][:-1]
+        page_data_string = page_data_string.split('root.App.main = ', 1)[1]
+        #print(page_data_string)
+        return json.loads(page_data_string)
+
+    def _get_stores(self,Statements):
+        rst=[]
+        for i in Statements:
+            row={}
+            for k in i.keys():
+                #print(k)
+                #print(i[k])
+                if type(i[k])==dict:
+                    if i[k]:
+                        row[k]=i[k]['raw']
+                    else:
+                        row[k]=''
+                else:
+                    row[k]=i[k]
+                #print(i[k])
+            rst.append(row)
+        df=pd.DataFrame.from_records(rst)
+        if 'endDate' in df.columns:
+            df['endDate'] = pd.to_datetime(df['endDate'], unit='s')
+            df.set_index('endDate',inplace=True)
+        if 'startdatetime' in df.columns:
+            df['startdatetime'] = pd.to_datetime(df['startdatetime'])
+            df.set_index('startdatetime',inplace=True)
+        return df
+
+    def get_next_earnings_date(self, symbol):
+        """Gets the next earnings date of symbol
+        Args:
+            symbol: A ticker symbol
+        Returns:
+            Unix timestamp of the next earnings date
+        Raises:
+            Exception: When symbol is invalid or earnings date is not available
+        """
+        url = '{0}/{1}'.format(BASE_STOCK_URL, symbol)
+        try:
+            page_data_dict = self._get_data_dict(url)
+            return page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['calendarEvents']['earnings']['earningsDate'][0]['raw']
+        except:
+            raise Exception('Invalid Symbol or Unavailable Earnings Date')
+
+    def _earnings_on(self, date, offset=0, count=1):
+        """Gets earnings calendar data from Yahoo! on a specific date.
+        Args:
+            date: A datetime.date instance representing the date of earnings data to be fetched.
+            offset: Position to fetch earnings data from.
+            count: Total count of earnings on date.
+        Returns:
+            An array of earnings calendar data on date given. E.g.,
+            [
+                {
+                    "ticker": "AMS.S",
+                    "companyshortname": "Ams AG",
+                    "startdatetime": "2017-04-23T20:00:00.000-04:00",
+                    "startdatetimetype": "TAS",
+                    "epsestimate": null,
+                    "epsactual": null,
+                    "epssurprisepct": null,
+                    "gmtOffsetMilliSeconds": 72000000
+                },
+                ...
+            ]
+        Raises:
+            TypeError: When date is not a datetime.date object.
+        """
+        if offset >= count:
+            return []
+
+        if not isinstance(date, datetime.date):
+            raise TypeError(
+                'Date should be a datetime.date object')
+        date_str = date.strftime('%Y-%m-%d')
+        logger.debug('Fetching earnings data for %s', date_str)
+        dated_url = '{0}?day={1}&offset={2}&size={3}'.format(
+            BASE_URL, date_str, offset, OFFSET_STEP)
+        page_data_dict = self._get_data_dict(dated_url)
+        stores_dict = page_data_dict['context']['dispatcher']['stores']
+        earnings_count = stores_dict['ScreenerCriteriaStore']['meta']['total']
+        # Recursively fetch more earnings on this date
+        new_offset = offset + OFFSET_STEP
+        more_earnings = self._earnings_on(date, new_offset, earnings_count)
+        curr_offset_earnings = stores_dict['ScreenerResultsStore']['results']['rows']
+        rsts=curr_offset_earnings + more_earnings
+        return rsts #curr_offset_earnings + more_earnings
+
+    def earnings_on(self, date, offset=0, count=1):
+        return self._get_stores(
+            self._earnings_on(date, offset, count)
+        ) 
+
+    def earnings_between(self, from_date, to_date):
+        """Gets earnings calendar data from Yahoo! in a date range.
+        Args:
+            from_date: A datetime.date instance representing the from-date (inclusive).
+            to_date: A datetime.date instance representing the to-date (inclusive).
+        Returns:
+            An array of earnigs calendar data of date range. E.g.,
+            [
+                {
+                    "ticker": "AMS.S",
+                    "companyshortname": "Ams AG",
+                    "startdatetime": "2017-04-23T20:00:00.000-04:00",
+                    "startdatetimetype": "TAS",
+                    "epsestimate": null,
+                    "epsactual": null,
+                    "epssurprisepct": null,
+                    "gmtOffsetMilliSeconds": 72000000
+                },
+                ...
+            ]
+        Raises:
+            ValueError: When from_date is after to_date.
+            TypeError: When either from_date or to_date is not a datetime.date object.
+        """
+        if from_date > to_date:
+            raise ValueError(
+                'From-date should not be after to-date')
+        if not (isinstance(from_date, datetime.date) and
+                isinstance(to_date, datetime.date)):
+            raise TypeError(
+                'From-date and to-date should be datetime.date objects')
+        earnings_data = []
+        current_date = from_date
+        delta = datetime.timedelta(days=1)
+        while current_date <= to_date:
+            earnings_data += self._earnings_on(current_date)
+            current_date += delta
+        return self._get_stores(earnings_data)
+
+    def get_earnings_of(self, symbol):
+        """Returns all the earnings dates of a symbol
+        Args:
+            symbol: A ticker symbol
+        Returns:
+            Array of all earnings dates with supplemental information
+        Raises:
+            Exception: When symbol is invalid or earnings date is not available
+        """
+        url = 'https://finance.yahoo.com/calendar/earnings?symbol={0}'.format(symbol)
+        try: 
+            page_data_dict = self._get_data_dict(url)
+            return self._get_stores(
+                page_data_dict["context"]["dispatcher"]["stores"]["ScreenerResultsStore"]["results"]["rows"]
+            )
+        except: 
+            raise Exception('Invalid Symbol or Unavailable Earnings Date')
+
+
+    def get_financials(self, symbol):
+        """Gets the next earnings date of symbol
+        Args:
+            symbol: A ticker symbol
+        Returns:
+            Unix timestamp of the next earnings date
+        Raises:
+            Exception: When symbol is invalid or earnings date is not available
+        """
+        url = '{0}/{1}/financials?p={1}'.format(BASE_STOCK_URL, symbol)
+        sheet={}
+        try:
+            page_data_dict = self._get_data_dict(url)
+            balance_annual = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['balanceSheetHistory']['balanceSheetStatements'])
+            balance_quarterly = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['balanceSheetHistoryQuarterly']['balanceSheetStatements'])
+            earnings_annual = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['earnings']['financialsChart']['yearly'])
+            earnings_quarterly = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['earnings']['financialsChart']['quarterly'])
+            income_annual = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['incomeStatementHistory']['incomeStatementHistory'])
+            income_quarterly = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['incomeStatementHistoryQuarterly']['incomeStatementHistory'])
+            cashflow_annual = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['cashflowStatementHistory']['cashflowStatements'])
+            cashflow_quarterly = self._get_stores(page_data_dict['context']['dispatcher']['stores']['QuoteSummaryStore']['cashflowStatementHistoryQuarterly']['cashflowStatements'])
+            sheet={
+                'balance_annual' : balance_annual,
+                'balance_quarterly' : balance_quarterly,
+                'earnings_annual' : earnings_annual,
+                'earnings_quarterly' : earnings_quarterly,
+                'income_annual' : income_annual,
+                'income_quarterly' : income_quarterly,
+                'cashflow_annual' : cashflow_annual,
+                'cashflow_quarterly' : cashflow_quarterly
+            }
+            return sheet
+        except:
+            raise Exception('Invalid Symbol or Unavailable Financials Date')
+
+    
+
+if __name__ == '__main__':  # pragma: no cover
+    date_from = datetime.datetime.strptime(
+        'Feb 1 2022  10:00AM', '%b %d %Y %I:%M%p')
+    date_to = datetime.datetime.strptime(
+        'Feb 4 2022  1:00PM', '%b %d %Y %I:%M%p')
+    yfs = YahooFinancialsStmt()
+    print(yfs.earnings_on(date_from))
+    print(yfs.earnings_between(date_from, date_to))
+    ##Returns the next earnings date of BOX in Unix timestamp
+    print(yfs.get_financials('box'))
+    ##Returns a list of all available earnings of BOX
+    print(yfs.get_earnings_of('box'))
